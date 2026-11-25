@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Habit Tracker" />
+  <link
+    rel="apple-touch-icon"
+    href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' rx='40' fill='%234f46e5'/%3E%3Cpath d='M52 94l24 24 52-52' fill='none' stroke='%23ffffff' stroke-width='16' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"
+  />
+  <title>Daily Habit Tracker</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-900 min-h-screen flex justify-center items-start sm:items-center p-4">
+  <main class="w-full max-w-md bg-white rounded-3xl shadow-lg border border-slate-200/80 overflow-hidden">
+    <!-- Header & Progress -->
+    <header class="bg-indigo-600 text-white px-6 pt-7 pb-6">
+      <p class="text-indigo-200 text-xs font-semibold uppercase tracking-wider" id="today-date">Today</p>
+      <h1 class="text-2xl font-bold mt-1">Daily Habits</h1>
+      <div class="mt-4 flex items-center justify-between text-sm">
+        <span id="progress-text" class="font-medium text-indigo-100">0 of 3 completed</span>
+        <span id="progress-percent" class="font-semibold text-white">0%</span>
+      </div>
+      <div class="mt-2 h-2.5 w-full bg-indigo-900/40 rounded-full overflow-hidden">
+        <div id="progress-bar" class="h-full bg-emerald-400 rounded-full transition-all duration-300" style="width: 0%"></div>
+      </div>
+    </header>
+
+    <!-- All-Done Celebration Banner -->
+    <div
+      id="celebration-banner"
+      class="hidden mx-5 mt-5 px-4 py-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-sm font-medium flex items-center gap-2.5"
+    >
+      <span class="text-lg" aria-hidden="true">🎉</span>
+      <span>All habits complete for today! Great job keeping your streaks alive.</span>
+    </div>
+
+    <!-- Add Habit Form -->
+    <section class="p-5 border-b border-slate-100">
+      <form id="habit-form" class="flex gap-2">
+        <label for="habit-input" class="sr-only">New habit</label>
+        <input
+          id="habit-input"
+          type="text"
+          placeholder="Add a new habit..."
+          maxlength="60"
+          class="flex-1 px-4 py-3 text-base bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+        />
+        <button
+          type="submit"
+          class="px-5 py-3 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-semibold rounded-xl transition cursor-pointer"
+        >
+          Add
+        </button>
+      </form>
+      <p id="input-error" class="text-xs text-rose-600 mt-2 hidden">Please type a habit name first.</p>
+    </section>
+
+    <!-- Habit List -->
+    <section class="p-5">
+      <ul id="habit-list" class="space-y-3"></ul>
+      <p id="empty-state" class="hidden text-center text-sm text-slate-400 py-6">
+        No habits yet — add one above to get started!
+      </p>
+    </section>
+  </main>
+
+  <script>
+    const STORAGE_KEY = 'daily_habits_v1';
+    const DATE_STORAGE_KEY = 'daily_habits_last_date_v1';
+
+    const DEFAULT_HABITS = [
+      { id: 1, name: 'Drink 8 glasses of water', done: false, streak: 0, lastCompletedDate: null, streakBeforeToday: 0 },
+      { id: 2, name: 'Read for 15 minutes', done: false, streak: 0, lastCompletedDate: null, streakBeforeToday: 0 },
+      { id: 3, name: 'Go for a 20-minute walk', done: false, streak: 0, lastCompletedDate: null, streakBeforeToday: 0 }
+    ];
+
+    // Date helpers (local YYYY-MM-DD strings)
+    function getDateKey(dateObj = new Date()) {
+      const y = dateObj.getFullYear();
+      const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+      const d = String(dateObj.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+
+    function getYesterdayKey() {
+      const d = new Date();
+      d.setDate(d.getDate() - 1);
+      return getDateKey(d);
+    }
+
+    // 1. Storage helpers: load and save habits safely on the device
+    function loadHabits() {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) {
+            return parsed.map((h) => ({
+              id: h.id,
+              name: h.name,
+              done: Boolean(h.done),
+              streak: Number(h.streak) || 0,
+              lastCompletedDate: h.lastCompletedDate || null,
+              streakBeforeToday: Number(h.streakBeforeToday) || 0
+            }));
+          }
+        }
+      } catch (err) {
+        // Fallback if browser storage is blocked
+      }
+      return DEFAULT_HABITS.map((h) => ({ ...h }));
+    }
+
+    function saveHabits() {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(habits));
+      } catch (err) {
+        // Ignore storage errors in restricted previews
+      }
+    }
+
+    // Reset daily checkmarks when a new day starts
+    function resetForNewDay() {
+      const todayKey = getDateKey();
+      const yesterdayKey = getYesterdayKey();
+      let lastDate = null;
+
+      try {
+        lastDate = localStorage.getItem(DATE_STORAGE_KEY);
+      } catch (err) {
+        lastDate = null;
+      }
+
+      if (lastDate !== todayKey) {
+        habits = habits.map((habit) => {
+          const keptStreak =
+            habit.lastCompletedDate === todayKey || habit.lastCompletedDate === yesterdayKey
+              ? habit.streak
+              : 0;
+          return {
+            ...habit,
+            done: habit.lastCompletedDate === todayKey,
+            streak: keptStreak,
+            streakBeforeToday: keptStreak
+          };
+        });
+        saveHabits();
+        try {
+          localStorage.setItem(DATE_STORAGE_KEY, todayKey);
+        } catch (err) {
+          // Ignore storage errors
+        }
+      }
+    }
+
+    // State: our list of habits
+    let habits = loadHabits();
+    resetForNewDay();
+    let nextId = habits.reduce((max, h) => Math.max(max, h.id || 0), 0) + 1;
+    let wasAllDone = habits.length > 0 && habits.every((h) => h.done);
+
+    // 2. Grab elements from the page
+    const todayDateEl = document.getElementById('today-date');
+    const progressTextEl = document.getElementById('progress-text');
+    const progressPercentEl = document.getElementById('progress-percent');
+    const progressBarEl = document.getElementById('progress-bar');
+    const celebrationBannerEl = document.getElementById('celebration-banner');
+    const habitFormEl = document.getElementById('habit-form');
+    const habitInputEl = document.getElementById('habit-input');
+    const inputErrorEl = document.getElementById('input-error');
+    const habitListEl = document.getElementById('habit-list');
+    const emptyStateEl = document.getElementById('empty-state');
+
+    // Show today's date nicely
+    todayDateEl.textContent = new Date().toLocaleDateString('en-US', {
+      weekday: 'long',
+      month: 'short',
+      day: 'numeric'
+    });
+
+    // 3. Render function: draws the habits, streaks, celebration, and progress bar
+    function renderHabits() {
+      habitListEl.innerHTML = '';
+
+      if (habits.length === 0) {
+        emptyStateEl.classList.remove('hidden');
+      } else {
+        emptyStateEl.classList.add('hidden');
+      }
+
+      habits.forEach((habit) => {
+        const li = document.createElement('li');
+        li.className = habit.done
+          ? 'flex items-center gap-2 p-2 pl-3 rounded-2xl border border-emerald-200 bg-emerald-50/70 transition'
+          : 'flex items-center gap-2 p-2 pl-3 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 transition';
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.type = 'button';
+        toggleBtn.className = 'flex-1 flex items-center gap-3.5 py-2 text-left cursor-pointer min-w-0';
+        toggleBtn.addEventListener('click', () => toggleHabit(habit.id));
+
+        const checkCircle = document.createElement('span');
+        checkCircle.className = habit.done
+          ? 'w-6 h-6 rounded-full bg-emerald-500 text-white flex items-center justify-center shrink-0 text-sm font-bold'
+          : 'w-6 h-6 rounded-full border-2 border-slate-300 flex items-center justify-center shrink-0';
+        checkCircle.textContent = habit.done ? '✓' : '';
+
+        const label = document.createElement('span');
+        label.className = habit.done
+          ? 'text-base font-medium text-emerald-900 line-through truncate'
+          : 'text-base font-medium text-slate-800 truncate';
+        label.textContent = habit.name;
+
+        toggleBtn.appendChild(checkCircle);
+        toggleBtn.appendChild(label);
+
+        const streakBadge = document.createElement('span');
+        streakBadge.className = habit.streak > 0
+          ? 'px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 shrink-0'
+          : 'px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-500 shrink-0';
+        streakBadge.textContent = habit.streak > 0 ? `🔥 ${habit.streak}d` : '0d';
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.type = 'button';
+        deleteBtn.setAttribute('aria-label', `Delete ${habit.name}`);
+        deleteBtn.className = 'w-9 h-9 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center transition cursor-pointer shrink-0 text-lg font-medium';
+        deleteBtn.textContent = '×';
+        deleteBtn.addEventListener('click', () => deleteHabit(habit.id));
+
+        li.appendChild(toggleBtn);
+        li.appendChild(streakBadge);
+        li.appendChild(deleteBtn);
+        habitListEl.appendChild(li);
+      });
+
+      // Update progress counter & bar
+      const total = habits.length;
+      const completed = habits.filter((h) => h.done).length;
+      const percent = total === 0 ? 0 : Math.round((completed / total) * 100);
+
+      progressTextEl.textContent = `${completed} of ${total} completed`;
+      progressPercentEl.textContent = `${percent}%`;
+      progressBarEl.style.width = `${percent}%`;
+
+      // Show celebration banner and fire confetti when hitting 100%
+      const isAllDone = total > 0 && completed === total;
+      if (isAllDone) {
+        celebrationBannerEl.classList.remove('hidden');
+        if (!wasAllDone && typeof confetti === 'function') {
+          confetti({ particleCount: 60, spread: 60, origin: { y: 0.7 } });
+        }
+      } else {
+        celebrationBannerEl.classList.add('hidden');
+      }
+      wasAllDone = isAllDone;
+    }
+
+    // 4. Actions: toggle, add, or delete a habit (and save each change)
+    function toggleHabit(id) {
+      const todayKey = getDateKey();
+      const yesterdayKey = getYesterdayKey();
+
+      habits = habits.map((habit) => {
+        if (habit.id !== id) return habit;
+
+        if (!habit.done) {
+          const baseStreak =
+            habit.lastCompletedDate === yesterdayKey ? habit.streak : habit.streakBeforeToday;
+          return {
+            ...habit,
+            done: true,
+            streakBeforeToday: baseStreak,
+            streak: baseStreak + 1,
+            lastCompletedDate: todayKey
+          };
+        } else {
+          return {
+            ...habit,
+            done: false,
+            streak: habit.streakBeforeToday,
+            lastCompletedDate: habit.streakBeforeToday > 0 ? yesterdayKey : null
+          };
+        }
+      });
+
+      saveHabits();
+      renderHabits();
+    }
+
+    function deleteHabit(id) {
+      habits = habits.filter((habit) => habit.id !== id);
+      saveHabits();
+      renderHabits();
+    }
+
+    habitFormEl.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const name = habitInputEl.value.trim();
+
+      if (!name) {
+        inputErrorEl.classList.remove('hidden');
+        return;
+      }
+
+      inputErrorEl.classList.add('hidden');
+      habits.push({
+        id: nextId++,
+        name,
+        done: false,
+        streak: 0,
+        lastCompletedDate: null,
+        streakBeforeToday: 0
+      });
+      habitInputEl.value = '';
+      saveHabits();
+      renderHabits();
+    });
+
+    habitInputEl.addEventListener('input', () => {
+      if (!inputErrorEl.classList.contains('hidden')) {
+        inputErrorEl.classList.add('hidden');
+      }
+    });
+
+    // Initial draw when the page loads
+    renderHabits();
+  </script>
+</body>
+</html>
